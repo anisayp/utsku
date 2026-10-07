@@ -1,0 +1,1439 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Exam_Mine Cloud — Platform Ujian Online UTS Esai & AI Generator</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Vue.js 3 CDN -->
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <!-- FontAwesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        brand: {
+                            bg: '#F8FAFC',
+                            surface: '#FFFFFF',
+                            primary: '#6366F1',
+                            primaryDark: '#4F46E5',
+                            accent: '#F43F5E',
+                            dark: '#0F172A',
+                            border: '#E2E8F0',
+                            amber: '#F59E0B'
+                        }
+                    },
+                    fontFamily: {
+                        sans: ['Plus Jakarta Sans', 'sans-serif']
+                    },
+                    boxShadow: {
+                        'soft': '0 10px 25px -5px rgba(0, 0, 0, 0.05), 0 8px 10px -6px rgba(0, 0, 0, 0.05)',
+                        'glow': '0 0 25px rgba(99, 102, 241, 0.2)'
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        body {
+            background: linear-gradient(135deg, #EEF2FF 0%, #F8FAFC 100%);
+            font-family: 'Plus Jakarta Sans', sans-serif;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #F1F5F9;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #CBD5E1;
+            border-radius: 4px;
+        }
+        .exam-active-area {
+            -webkit-touch-callout: none;
+        }
+        textarea, input, select {
+            user-select: text !important;
+            -webkit-user-select: text !important;
+        }
+        [v-cloak] { display: none !important; }
+    </style>
+
+    <!-- Google Firebase SDK (Firestore, Auth, & Storage) -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js";
+        import { getFirestore, collection, doc, setDoc, getDocs, onSnapshot, deleteDoc } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
+        import { getStorage, ref as storageRef, uploadBytes, getDownloadURL } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-storage.js";
+
+        window.initCloudFirebase = async function() {
+            try {
+                if (typeof __firebase_config === 'undefined' || !__firebase_config) {
+                    window.isCloudReady = false;
+                    window.dispatchEvent(new Event('cloud-firebase-ready'));
+                    return;
+                }
+                const appId = typeof __app_id !== 'undefined' ? __app_id : 'exam-mine-cloud-drive-app';
+                const firebaseConfig = JSON.parse(__firebase_config);
+                const app = initializeApp(firebaseConfig);
+                const db = getFirestore(app);
+                const auth = getAuth(app);
+                const storage = getStorage(app);
+
+                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                    await signInWithCustomToken(auth, __initial_auth_token);
+                } else {
+                    await signInAnonymously(auth);
+                }
+
+                window.cloudDb = db;
+                window.cloudAuth = auth;
+                window.cloudStorage = storage;
+                window.cloudAppId = appId;
+                window.isCloudReady = true;
+
+                window.cloudApi = {
+                    async saveDoc(collName, docId, data) {
+                        try {
+                            if (!window.cloudDb) return;
+                            await setDoc(doc(window.cloudDb, 'artifacts', window.cloudAppId, 'public', 'data', collName, docId), data);
+                        } catch (err) {
+                            console.warn("Cloud save warning:", err);
+                        }
+                    },
+                    async removeDoc(collName, docId) {
+                        try {
+                            if (!window.cloudDb) return;
+                            await deleteDoc(doc(window.cloudDb, 'artifacts', window.cloudAppId, 'public', 'data', collName, docId));
+                        } catch (err) {
+                            console.warn("Cloud remove warning:", err);
+                        }
+                    },
+                    async uploadFileToCloud(file, folder = 'uploads') {
+                        try {
+                            if (!window.cloudStorage) {
+                                // Fallback to base64 if storage not initialized
+                                return new Promise((resolve) => {
+                                    const reader = new FileReader();
+                                    reader.onload = (e) => resolve(e.target.result);
+                                    reader.readAsDataURL(file);
+                                });
+                            }
+                            const filename = folder + '/' + Date.now() + '_' + file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+                            const fileRef = storageRef(window.cloudStorage, filename);
+                            await uploadBytes(fileRef, file);
+                            const downloadUrl = await getDownloadURL(fileRef);
+                            return downloadUrl;
+                        } catch (err) {
+                            console.warn("Cloud Storage upload warning, using local fallback:", err);
+                            return new Promise((resolve) => {
+                                const reader = new FileReader();
+                                reader.onload = (e) => resolve(e.target.result);
+                                reader.readAsDataURL(file);
+                            });
+                        }
+                    },
+                    listenCollection(collName, callback) {
+                        try {
+                            if (!window.cloudDb) return () => {};
+                            return onSnapshot(collection(window.cloudDb, 'artifacts', window.cloudAppId, 'public', 'data', collName), (snapshot) => {
+                                let list = [];
+                                snapshot.forEach(d => list.push(d.data()));
+                                callback(list);
+                            }, (err) => { console.warn("Cloud listen warning:", err); });
+                        } catch (e) {
+                            return () => {};
+                        }
+                    }
+                };
+
+                window.dispatchEvent(new Event('cloud-firebase-ready'));
+            } catch (err) {
+                window.isCloudReady = false;
+                window.dispatchEvent(new Event('cloud-firebase-ready'));
+            }
+        };
+        window.initCloudFirebase();
+    </script>
+</head>
+<body class="text-slate-800 antialiased min-h-screen flex flex-col items-center justify-start p-3 sm:p-6">
+
+<div id="app" class="w-full max-w-5xl min-h-[92vh] bg-brand-surface shadow-2xl rounded-3xl flex flex-col relative overflow-hidden border border-indigo-100 my-auto" v-cloak>
+
+    <!-- TOAST NOTIFICATION -->
+    <div v-if="toastMessage" class="absolute top-20 left-1/2 -translate-x-1/2 z-50 bg-slate-900 text-white text-xs font-bold px-5 py-3 rounded-2xl shadow-2xl border border-slate-700 flex items-center gap-2.5 animate-bounce">
+        <i class="fa-solid fa-circle-check text-emerald-400 text-base"></i>
+        <span>{{ toastMessage }}</span>
+    </div>
+
+    <!-- HEADER / TOPBAR -->
+    <header class="bg-brand-dark text-white px-6 py-4 sticky top-0 z-30 shadow-md flex flex-wrap justify-between items-center border-b border-indigo-900/50 gap-4">
+        <div class="flex items-center space-x-3.5">
+            <div class="w-11 h-11 rounded-2xl bg-gradient-to-tr from-brand-primary via-indigo-600 to-brand-accent flex items-center justify-center font-black text-2xl text-white shadow-lg shadow-indigo-500/30 overflow-hidden">
+                <img v-if="dosenProfile.siteLogoUrl" :src="dosenProfile.siteLogoUrl" class="w-full h-full object-cover" onerror="this.style.display='none'">
+                <span v-else>E</span>
+            </div>
+            <div>
+                <div class="flex items-center gap-2">
+                    <h1 class="font-extrabold text-lg tracking-tight">Exam_Mine Cloud</h1>
+                    <span class="bg-emerald-500/20 text-emerald-300 text-[10px] font-bold px-2.5 py-0.5 rounded-full border border-emerald-500/30 flex items-center gap-1.5">
+                        <span class="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span> GOOGLE DRIVE STORAGE ACTIVE
+                    </span>
+                </div>
+                <p class="text-xs text-slate-400 font-medium tracking-tight">Dibuat oleh: <span class="text-amber-400 font-bold">{{ dosenProfile.nama }}</span> (NIP. {{ dosenProfile.nip }})</p>
+            </div>
+        </div>
+        
+        <!-- Mode Switcher Toggle -->
+        <div class="bg-slate-800/90 p-1.5 rounded-2xl flex text-xs font-bold border border-slate-700 shadow-inner">
+            <button 
+                @click="switchMode('mahasiswa')" 
+                :class="currentMode === 'mahasiswa' ? 'bg-brand-primary text-white shadow-md' : 'text-slate-400 hover:text-white'"
+                class="px-4 py-2 rounded-xl transition-all duration-200 flex items-center gap-2">
+                <i class="fa-solid fa-user-graduate"></i> Portal Mahasiswa
+            </button>
+            <button 
+                @click="switchMode('dosen')" 
+                :class="currentMode === 'dosen' ? 'bg-brand-primary text-white shadow-md' : 'text-slate-400 hover:text-white'"
+                class="px-4 py-2 rounded-xl transition-all duration-200 flex items-center gap-2">
+                <i class="fa-solid fa-chalkboard-user"></i> Portal Dosen
+            </button>
+        </div>
+    </header>
+
+    <main class="flex-1 p-6 sm:p-10 overflow-y-auto bg-slate-50/50">
+
+        <div v-if="currentMode === 'mahasiswa'" class="max-w-2xl mx-auto space-y-6">
+
+            <!-- STEP 1: KODE UJIAN -->
+            <div v-if="mhsStep === 'code'" class="space-y-6 pt-6">
+                <div class="text-center space-y-3">
+                    <div class="inline-flex p-4 bg-indigo-50 text-brand-primary rounded-3xl shadow-sm mb-1 border border-indigo-100">
+                        <i class="fa-solid fa-shield-halved text-3xl"></i>
+                    </div>
+                    <h2 class="text-3xl font-black text-slate-900">Portal Ujian Mahasiswa Baru</h2>
+                    <p class="text-sm text-slate-500 font-medium max-w-md mx-auto">Masukkan 4 digit kode ujian resmi dari server cloud Dosen Anda untuk memulai.</p>
+                </div>
+
+                <div class="bg-white p-8 rounded-3xl border border-slate-100 shadow-soft space-y-5">
+                    <div>
+                        <label class="block text-xs font-extrabold text-slate-600 uppercase tracking-wider mb-2.5">Kode Akses Ujian (4 Digit)</label>
+                        <input 
+                            type="text" 
+                            maxlength="4" 
+                            v-model="inputExamCode" 
+                            placeholder="Cth: 1234" 
+                            class="w-full text-center text-4xl font-black tracking-widest py-4 bg-slate-50 border-2 border-slate-200 rounded-2xl focus:border-brand-primary focus:bg-white focus:outline-none transition">
+                    </div>
+                    <p v-if="codeError" class="text-xs text-rose-600 text-center font-bold bg-rose-50 p-3 rounded-2xl border border-rose-100"><i class="fa-solid fa-triangle-exclamation mr-1"></i> {{ codeError }}</p>
+
+                    <button 
+                        @click="verifyExamCode" 
+                        class="w-full min-h-[52px] bg-brand-primary hover:bg-brand-primaryDark text-white font-extrabold py-4 rounded-2xl shadow-xl shadow-indigo-500/25 transition active:scale-95 flex justify-center items-center gap-2.5 text-sm uppercase tracking-wider">
+                        <span>Lanjut ke Identitas</span>
+                        <i class="fa-solid fa-arrow-right"></i>
+                    </button>
+                </div>
+
+                <sakuragi-box expression="confident" :quote="dosenProfile.aiProctorMessage || 'Selamat datang rekan mahasiswa baru! Jelaskan apa maksud dari masalah, karakteristik, serta solusi studi kasusmu.'"></sakuragi-box>
+            </div>
+
+            <!-- STEP 2: IDENTITAS -->
+            <div v-if="mhsStep === 'identity'" class="space-y-6">
+                <div class="bg-indigo-50/70 border border-indigo-100 rounded-2xl p-5 flex items-center justify-between shadow-sm">
+                    <div>
+                        <span class="text-[10px] uppercase tracking-wider font-extrabold text-indigo-600 bg-indigo-100 px-2.5 py-1 rounded-md">Ujian Cloud Aktif</span>
+                        <h4 class="text-base font-black text-slate-900 mt-1">{{ currentExam.title }}</h4>
+                    </div>
+                    <span class="text-xs bg-brand-primary text-white font-mono px-3.5 py-2 rounded-xl font-bold shadow">Kode: {{ currentExam.code }}</span>
+                </div>
+
+                <div class="bg-white p-8 rounded-3xl border border-slate-100 shadow-soft space-y-5">
+                    <h3 class="font-extrabold text-base text-slate-900 border-b border-slate-100 pb-3.5 flex items-center gap-2.5">
+                        <i class="fa-solid fa-id-card text-brand-primary text-lg"></i> Data Peserta Ujian Mahasiswa Baru
+                    </h3>
+                    
+                    <div class="flex justify-center mb-2">
+                        <img :src="'https://ui-avatars.com/api/?name=' + encodeURIComponent(studentForm.nama || 'Mahasiswa') + '&background=6366F1&color=fff&bold=true'" class="w-20 h-20 rounded-2xl shadow-md border-2 border-white object-cover">
+                    </div>
+
+                    <div>
+                        <label class="block text-xs font-bold text-slate-600 mb-1.5">Nama Lengkap *</label>
+                        <input type="text" v-model="studentForm.nama" placeholder="Sesuai kartu mahasiswa / KRS" class="w-full p-3.5 text-sm bg-slate-50 border border-slate-200 rounded-2xl focus:border-brand-primary focus:bg-white focus:outline-none font-medium">
+                    </div>
+
+                    <div>
+                        <label class="block text-xs font-bold text-slate-600 mb-1.5">NIM / Stambuk (Angka) *</label>
+                        <input type="text" v-model="studentForm.nim" @input="filterNimInput" placeholder="Cth: 240101004" class="w-full p-3.5 text-sm bg-slate-50 border border-slate-200 rounded-2xl focus:border-brand-primary focus:bg-white focus:outline-none font-mono font-bold">
+                    </div>
+
+                    <div class="grid grid-cols-2 gap-4">
+                        <div>
+                            <label class="block text-xs font-bold text-slate-600 mb-1.5">Kelas *</label>
+                            <input type="text" v-model="studentForm.kelas" placeholder="Cth: PTIK A 2024" class="w-full p-3.5 text-sm bg-slate-50 border border-slate-200 rounded-2xl focus:border-brand-primary focus:bg-white focus:outline-none font-medium">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-bold text-slate-600 mb-1.5">Angkatan *</label>
+                            <input type="text" v-model="studentForm.angkatan" placeholder="Cth: 2024" class="w-full p-3.5 text-sm bg-slate-50 border border-slate-200 rounded-2xl focus:border-brand-primary focus:bg-white focus:outline-none font-medium">
+                        </div>
+                    </div>
+
+                    <div>
+                        <label class="block text-xs font-bold text-slate-600 mb-1.5">Jurusan di UNM *</label>
+                        <select v-model="studentForm.jurusan" class="w-full p-3.5 text-sm bg-slate-50 border border-slate-200 rounded-2xl focus:border-brand-primary focus:bg-white focus:outline-none font-medium">
+                            <option disabled value="">Pilih Jurusan UNM...</option>
+                            <option v-for="j in unmJurusanList" :key="j" :value="j">{{ j }}</option>
+                        </select>
+                    </div>
+
+                    <p v-if="identityError" class="text-xs text-rose-600 font-bold text-center bg-rose-50 p-3 rounded-xl"><i class="fa-solid fa-circle-exclamation mr-1"></i> {{ identityError }}</p>
+
+                    <button 
+                        @click="startExam" 
+                        :disabled="!isIdentityValid" 
+                        :class="isIdentityValid ? 'bg-brand-primary hover:bg-brand-primaryDark text-white shadow-xl shadow-indigo-500/25' : 'bg-slate-200 text-slate-400 cursor-not-allowed'"
+                        class="w-full min-h-[52px] font-extrabold py-4 rounded-2xl transition flex justify-center items-center gap-2.5 text-sm uppercase tracking-wider mt-2">
+                        <i class="fa-solid fa-play"></i>
+                        <span>MULAI UJIAN SEKARANG</span>
+                    </button>
+                </div>
+
+                <sakuragi-box 
+                    :expression="isIdentityValid ? 'confident' : 'stern'" 
+                    :quote="isIdentityValid ? 'Identitas lengkap. Tekan MULAI UJIAN!' : 'Lengkapi seluruh data identitas terlebih dahulu.'">
+                </sakuragi-box>
+            </div>
+
+            <!-- STEP 3: ACTIVE EXAM -->
+            <div v-if="mhsStep === 'active_exam'" class="space-y-5 exam-active-area">
+                <div class="bg-rose-900 text-white p-4 rounded-2xl text-xs flex items-center justify-between shadow-lg">
+                    <div class="flex items-center space-x-3">
+                        <span class="relative flex h-3 w-3">
+                            <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>
+                            <span class="relative inline-flex rounded-full h-3 w-3 bg-rose-500"></span>
+                        </span>
+                        <span class="font-extrabold tracking-wide uppercase text-xs">ACTIVE EXAM MODE (PURE CLOUD)</span>
+                    </div>
+                    <span class="bg-rose-950 px-3 py-1 rounded-xl text-xs font-mono font-bold border border-rose-700">PENGAWAS AI AKTIF</span>
+                </div>
+
+                <div class="bg-amber-50 border-l-4 border-amber-500 p-4 rounded-r-2xl text-xs text-amber-900 font-medium shadow-sm">
+                    <p class="font-extrabold mb-0.5 text-sm"><i class="fa-solid fa-triangle-exclamation text-amber-600 mr-1.5"></i> PERINGATAN KETAT:</p>
+                    <p>Dilarang berpindah tab browser atau meminimalkan aplikasi. Pelanggaran akan langsung mereset ujian Anda secara otomatis!</p>
+                </div>
+
+                <div class="space-y-5">
+                    <div 
+                        v-for="(q, index) in currentExam.questions" 
+                        :key="q.id" 
+                        class="bg-white p-6 sm:p-8 rounded-3xl border border-slate-100 shadow-soft space-y-4">
+                        
+                        <div class="flex justify-between items-start border-b border-slate-100 pb-3">
+                            <span class="bg-slate-900 text-white font-black text-xs px-3.5 py-1.5 rounded-xl">Soal Studi Kasus & Konsep {{ index + 1 }}</span>
+                            <span class="bg-amber-100 text-amber-900 font-extrabold text-xs px-3.5 py-1.5 rounded-xl">Bobot: {{ q.maxScore }} Poin</span>
+                        </div>
+
+                        <p class="text-base font-bold text-slate-900 leading-relaxed">{{ q.text }}</p>
+
+                        <div>
+                            <label class="block text-xs font-bold text-slate-500 mb-2">Jelaskan maksud, karakteristik, serta solusi analitis Anda:</label>
+                            <textarea 
+                                v-model="studentAnswers[q.id]" 
+                                @paste.prevent="handlePasteAttempt"
+                                rows="7" 
+                                placeholder="Jelaskan maksud, konsep, dan argumen kritismu di sini..."
+                                class="w-full p-4 sm:p-5 text-sm bg-slate-50 border border-slate-200 rounded-2xl focus:border-brand-primary focus:bg-white focus:outline-none leading-relaxed transition font-medium">
+                            </textarea>
+                            <div class="flex justify-between items-center mt-2">
+                                <span class="text-xs text-rose-600 font-semibold italic" v-if="pasteWarning">⚠️ Copy-paste diblokir sistem pengawas!</span>
+                                <span class="text-xs text-emerald-600 font-bold ml-auto"><i class="fa-solid fa-cloud"></i> Sinkron Cloud Real-Time</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <sakuragi-box expression="focused" :quote="dosenProfile.aiProctorMessage || 'Jelaskan apa maksud dari masalah di atas, kemukakan pendapat dan sudut pandang kritismu secara mendalam!'"></sakuragi-box>
+
+                <div class="pt-3">
+                    <button 
+                        @click="confirmSubmit" 
+                        class="w-full min-h-[56px] bg-emerald-600 hover:bg-emerald-700 text-white font-black py-4 rounded-2xl shadow-xl shadow-emerald-600/25 transition active:scale-95 flex items-center justify-center gap-2.5 text-sm uppercase tracking-wider">
+                        <i class="fa-solid fa-paper-plane text-base"></i>
+                        <span>KUMPULKAN JAWABAN UJIAN</span>
+                    </button>
+                </div>
+            </div>
+
+            <!-- STEP 4: RESET -->
+            <div v-if="mhsStep === 'reset_page'" class="py-12 space-y-6 text-center">
+                <div class="bg-rose-50 border-2 border-rose-500 rounded-3xl p-8 shadow-2xl space-y-5 max-w-md mx-auto">
+                    <div class="w-20 h-20 bg-rose-600 text-white rounded-full flex items-center justify-center mx-auto text-4xl shadow-lg animate-bounce">
+                        <i class="fa-solid fa-ban"></i>
+                    </div>
+                    <h3 class="text-2xl font-black text-rose-900 uppercase">SESI DI-RESET!</h3>
+                    <p class="text-sm font-bold text-rose-800">Sistem mendeteksi Anda meninggalkan halaman/tab ujian.</p>
+                    <p class="text-xs text-slate-600 leading-relaxed">Seluruh jawaban sementara Anda telah dihapus otomatis di server cloud dan sesi dinyatakan INVALID.</p>
+                </div>
+
+                <sakuragi-box expression="angry" quote="Hei! Jangan coba-coba pindah tab! Ujianmu di-reset!"></sakuragi-box>
+
+                <button 
+                    @click="restartAfterReset" 
+                    class="w-full max-w-md mx-auto min-h-[52px] bg-brand-dark hover:bg-black text-white font-extrabold py-4 rounded-2xl shadow-lg transition flex justify-center items-center gap-2">
+                    <i class="fa-solid fa-rotate-left"></i>
+                    <span>MULAI ULANG UJIAN</span>
+                </button>
+            </div>
+
+            <!-- STEP 5: EVALUATING -->
+            <div v-if="mhsStep === 'evaluating'" class="py-20 space-y-6 text-center">
+                <div class="bg-white p-10 rounded-3xl border border-slate-100 shadow-soft space-y-5 max-w-md mx-auto">
+                    <div class="inline-block p-5 bg-indigo-50 rounded-2xl text-brand-primary animate-spin text-5xl">
+                        <i class="fa-solid fa-circle-notch"></i>
+                    </div>
+                    <h3 class="text-xl font-black text-slate-900">AI Menilai Kedalaman Nalar & Argumen Anda...</h3>
+                    <p class="text-xs text-slate-500 font-medium">Sistem mengevaluasi penjelasan maksud, karakteristik, serta sudut pandang pemecahan masalah.</p>
+                </div>
+                <sakuragi-box expression="thinking" quote="Jawaban diterima di server cloud. Menilai kualitas argumen dan pendapatmu."></sakuragi-box>
+            </div>
+
+            <!-- STEP 6: RESULTS & FULL LEADERBOARD -->
+            <div v-if="mhsStep === 'results'" class="space-y-6">
+                <div class="bg-gradient-to-br from-brand-dark to-slate-900 text-white p-8 rounded-3xl shadow-xl text-center space-y-4 relative overflow-hidden">
+                    <div class="absolute -right-4 -bottom-4 opacity-10 text-9xl font-black">CLOUD</div>
+                    <span class="bg-amber-400 text-slate-900 font-extrabold text-xs px-4 py-1.5 rounded-full uppercase tracking-wider">Hasil Penilaian AI Esai</span>
+                    <div>
+                        <h2 class="text-xs text-slate-300 font-medium">SKOR KUALITAS ARGUMEN AKHIR</h2>
+                        <div class="text-6xl font-black text-amber-300 tracking-tight my-2">
+                            {{ currentSubmission.totalScore }} <span class="text-2xl text-slate-400 font-normal">/ 100</span>
+                        </div>
+                    </div>
+                    <div class="grid grid-cols-2 gap-4 pt-4 border-t border-slate-800 text-left text-xs">
+                        <div>
+                            <p class="text-slate-400">Nama Mahasiswa:</p>
+                            <p class="font-bold text-sm truncate">{{ currentSubmission.nama }}</p>
+                        </div>
+                        <div>
+                            <p class="text-slate-400">Peringkat Kelas:</p>
+                            <p class="font-bold text-sm text-amber-300">#{{ getStudentRank(currentSubmission.nim) }} dari {{ activeExamSubmissions.length }} peserta</p>
+                        </div>
+                    </div>
+                </div>
+
+                <sakuragi-box expression="happy" quote="Evaluasi cloud selesai. Pertajam terus sudut pandang dan nalar kritis Anda!"></sakuragi-box>
+
+                <!-- FULL CLASS LEADERBOARD SECTION (SHOWING ALL PARTICIPANTS) -->
+                <div class="bg-white p-6 sm:p-8 rounded-3xl border border-slate-100 shadow-soft space-y-4">
+                    <div class="flex justify-between items-center border-b border-slate-100 pb-3">
+                        <h3 class="font-extrabold text-base text-slate-900 flex items-center gap-2">
+                            <i class="fa-solid fa-trophy text-amber-500"></i>
+                            <span>Peringkat Lengkap Seluruh Peserta Kelas (1 - {{ activeExamSubmissions.length }})</span>
+                        </h3>
+                        <span class="bg-indigo-50 text-brand-primary text-xs font-extrabold px-3 py-1 rounded-xl">{{ activeExamSubmissions.length }} Peserta</span>
+                    </div>
+
+                    <div class="space-y-2.5 max-h-80 overflow-y-auto pr-1">
+                        <div 
+                            v-for="(sub, rankIdx) in activeExamSubmissions" 
+                            :key="sub.id"
+                            :class="sub.nim === currentSubmission.nim ? 'bg-indigo-50/80 border-indigo-200 ring-2 ring-indigo-500/20' : 'bg-slate-50 border-slate-100'"
+                            class="p-4 rounded-2xl border flex items-center justify-between transition">
+                            <div class="flex items-center gap-3.5">
+                                <div :class="rankIdx === 0 ? 'bg-amber-400 text-slate-900 font-black' : (rankIdx === 1 ? 'bg-slate-300 text-slate-900 font-black' : (rankIdx === 2 ? 'bg-amber-700 text-white font-black' : 'bg-slate-200 text-slate-700 font-bold'))"
+                                     class="w-8 h-8 rounded-xl flex items-center justify-center text-xs shadow-sm">
+                                    #{{ rankIdx + 1 }}
+                                </div>
+                                <div>
+                                    <p class="text-xs font-black text-slate-900">{{ sub.nama }} <span v-if="sub.nim === currentSubmission.nim" class="bg-brand-primary text-white text-[10px] px-2 py-0.5 rounded-full ml-1">Anda</span></p>
+                                    <p class="text-[11px] text-slate-500 font-medium">NIM: {{ sub.nim }} • Kelas: {{ sub.kelas }} • {{ sub.jurusan }}</p>
+                                </div>
+                            </div>
+                            <div class="text-right">
+                                <span class="text-sm font-black text-brand-primary">{{ sub.totalScore }}</span>
+                                <span class="text-[10px] text-slate-400 block font-bold">Poin</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="space-y-4">
+                    <h3 class="font-extrabold text-base text-slate-900 flex items-center gap-2">
+                        <i class="fa-solid fa-list-check text-brand-primary"></i>
+                        <span>Ulasan Kualitas Penilaian AI per Soal</span>
+                    </h3>
+
+                    <div 
+                        v-for="(scoreItem, idx) in currentSubmission.scores" 
+                        :key="scoreItem.questionId" 
+                        class="bg-white p-6 rounded-3xl border border-slate-100 shadow-soft space-y-3.5">
+                        <div class="flex justify-between items-center border-b border-slate-100 pb-3">
+                            <span class="font-black text-xs text-slate-700">Soal {{ idx + 1 }}</span>
+                            <span class="font-black text-sm text-brand-primary">{{ scoreItem.score }} / {{ scoreItem.maxScore }} Poin</span>
+                        </div>
+                        <div>
+                            <p class="text-xs text-slate-400 font-bold">Jawaban / Pendapat Anda:</p>
+                            <p class="text-xs sm:text-sm text-slate-800 bg-slate-50 p-3.5 rounded-2xl border border-slate-100 mt-1.5 italic font-medium">
+                                "{{ getAnswerForQuestion(scoreItem.questionId) }}"
+                            </p>
+                        </div>
+                        <div class="bg-amber-50/80 border border-amber-200/60 rounded-2xl p-4 text-xs space-y-1.5">
+                            <p class="font-extrabold text-amber-900 flex items-center gap-2">
+                                <i class="fa-solid fa-robot text-amber-600"></i>
+                                <span>Ulasan Kualitas Analisis AI:</span>
+                            </p>
+                            <p class="text-amber-950 leading-relaxed font-medium">{{ scoreItem.reasoning }}</p>
+                        </div>
+                    </div>
+                </div>
+
+                <button 
+                    @click="resetStudentSession"
+                    class="w-full bg-slate-900 hover:bg-black text-white font-extrabold py-4 rounded-2xl text-xs uppercase tracking-wider transition active:scale-95 shadow-lg">
+                    Selesai / Keluar Ujian
+                </button>
+            </div>
+
+        </div>
+
+        <div v-if="currentMode === 'dosen'" class="max-w-4xl mx-auto space-y-6">
+
+            <!-- LOGIN DOSEN -->
+            <div v-if="!dosenAuthenticated" class="space-y-6 pt-6 max-w-md mx-auto">
+                <div class="bg-white p-8 rounded-3xl border border-slate-100 shadow-soft text-center space-y-6">
+                    <div class="w-20 h-20 bg-gradient-to-tr from-brand-dark to-slate-800 text-white rounded-3xl mx-auto flex items-center justify-center text-3xl shadow-xl">
+                        <i class="fa-solid fa-chalkboard-user"></i>
+                    </div>
+                    <div>
+                        <h2 class="text-2xl font-black text-slate-900">Portal Dosen (Google Drive Cloud)</h2>
+                        <p class="text-xs text-slate-500 font-medium mt-1">Masukkan Kredensial Akademik & Password Keamanan</p>
+                    </div>
+
+                    <div class="space-y-4 text-left">
+                        <div>
+                            <label class="block text-xs font-extrabold text-slate-600 mb-1.5">Nama Lengkap & Gelar</label>
+                            <input type="text" v-model="dosenLoginForm.nama" placeholder="Cth: Aldiansyah Nur Alam, S.Pd., M.Pd." class="w-full p-3.5 text-xs bg-slate-50 border border-slate-200 rounded-2xl focus:border-brand-primary focus:bg-white focus:outline-none font-medium">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-extrabold text-slate-600 mb-1.5">NIP / NIDN</label>
+                            <input type="text" v-model="dosenLoginForm.nip" placeholder="Cth: 199605142025061004" class="w-full p-3.5 text-xs bg-slate-50 border border-slate-200 rounded-2xl font-mono focus:border-brand-primary focus:bg-white focus:outline-none font-bold">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-extrabold text-slate-600 mb-1.5">Jurusan di UNM</label>
+                            <select v-model="dosenLoginForm.jurusan" class="w-full p-3.5 text-xs bg-slate-50 border border-slate-200 rounded-2xl focus:border-brand-primary focus:bg-white focus:outline-none font-medium">
+                                <option disabled value="">Pilih Jurusan UNM...</option>
+                                <option v-for="j in unmJurusanList" :key="j" :value="j">{{ j }}</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-extrabold text-slate-600 mb-1.5">Perguruan Tinggi</label>
+                            <select v-model="dosenLoginForm.kampus" class="w-full p-3.5 text-xs bg-slate-50 border border-slate-200 rounded-2xl focus:border-brand-primary focus:bg-white focus:outline-none font-medium">
+                                <option v-for="k in kampusList" :key="k" :value="k">{{ k }}</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-extrabold text-slate-600 mb-1.5">Password Keamanan Dosen</label>
+                            <input type="password" v-model="dosenLoginForm.pin" placeholder="Masukkan Password Rahasia" class="w-full p-3.5 text-xs bg-slate-50 border border-slate-200 rounded-2xl font-black tracking-widest focus:border-brand-primary focus:bg-white focus:outline-none">
+                        </div>
+                    </div>
+
+                    <p v-if="dosenPinError" class="text-xs text-rose-600 font-bold bg-rose-50 p-3 rounded-2xl"><i class="fa-solid fa-triangle-exclamation mr-1"></i> Password atau kredensial tidak valid!</p>
+
+                    <button 
+                        @click="verifyDosenLogin"
+                        class="w-full bg-brand-primary hover:bg-brand-primaryDark text-white font-extrabold py-4 rounded-2xl shadow-xl shadow-indigo-500/25 transition active:scale-95 text-xs uppercase tracking-wider">
+                        Masuk Dashboard Dosen (Cloud Drive)
+                    </button>
+                </div>
+            </div>
+
+            <!-- DASHBOARD DOSEN -->
+            <div v-else class="space-y-6">
+                <div class="bg-white p-6 rounded-3xl border border-slate-100 shadow-soft flex flex-wrap items-center justify-between gap-4">
+                    <div class="flex items-center gap-4">
+                        <img :src="dosenProfile.avatarUrl || ('https://ui-avatars.com/api/?name=' + encodeURIComponent(dosenProfile.nama) + '&background=6366F1&color=fff&bold=true')" class="w-16 h-16 rounded-2xl shadow-md object-cover">
+                        <div>
+                            <h3 class="font-black text-base text-slate-900">{{ dosenProfile.nama }}</h3>
+                            <p class="text-xs text-slate-500 font-medium">NIP: {{ dosenProfile.nip }} • {{ dosenProfile.jurusan }}</p>
+                            <p class="text-xs text-indigo-600 font-bold mt-0.5">{{ dosenProfile.kampus }}</p>
+                        </div>
+                    </div>
+                    <button @click="openCustomizationModal" class="bg-indigo-50 hover:bg-indigo-100 text-brand-primary px-4 py-3 rounded-2xl text-xs font-black transition shadow-sm flex items-center gap-2">
+                        <i class="fa-solid fa-gear text-sm"></i> Kustomisasi Profil & AI
+                    </button>
+                </div>
+
+                <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <button @click="openAiGeneratorModal" class="bg-gradient-to-r from-purple-700 to-indigo-600 hover:opacity-95 text-white font-extrabold py-4 px-4 rounded-2xl text-xs shadow-lg shadow-purple-600/20 transition active:scale-95 flex items-center justify-center gap-2.5">
+                        <i class="fa-solid fa-wand-magic-sparkles text-amber-300 text-sm"></i> Buat Soal AI (Mahasiswa Baru)
+                    </button>
+                    <button @click="openCreateExamModal" class="bg-brand-dark hover:bg-black text-white font-extrabold py-4 px-4 rounded-2xl text-xs shadow-lg transition active:scale-95 flex items-center justify-center gap-2.5">
+                        <i class="fa-solid fa-plus text-indigo-400 text-sm"></i> Buat Ujian Manual
+                    </button>
+                    <button @click="exportCSV" class="bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold py-4 px-4 rounded-2xl text-xs shadow-lg shadow-emerald-600/20 transition active:scale-95 flex items-center justify-center gap-2.5">
+                        <i class="fa-solid fa-file-csv text-base"></i> Unduh Rekap CSV Cloud
+                    </button>
+                </div>
+
+                <div class="space-y-4">
+                    <h3 class="font-black text-xs text-slate-400 uppercase tracking-wider">Daftar Paket Ujian Cloud Terbit</h3>
+
+                    <div v-if="exams.length === 0" class="text-xs text-slate-400 italic py-10 text-center bg-white rounded-3xl border border-slate-100 shadow-soft">
+                        Belum ada ujian di server cloud. Buat melalui AI Generator atau Buat Manual.
+                    </div>
+
+                    <div v-for="ex in exams" :key="ex.code" class="bg-white p-6 rounded-3xl border border-slate-100 shadow-soft space-y-5">
+                        <div class="flex flex-wrap justify-between items-start gap-3">
+                            <div>
+                                <span class="text-xs font-extrabold bg-indigo-50 text-brand-primary px-3 py-1 rounded-lg font-mono">Kode Ujian: {{ ex.code }}</span>
+                                <h4 class="font-black text-lg text-slate-900 mt-2">{{ ex.title }}</h4>
+                            </div>
+                            <div class="flex items-center gap-2">
+                                <span class="text-xs bg-slate-100 text-slate-700 font-extrabold px-3.5 py-1.5 rounded-full">{{ getSubmissionsCount(ex.code) }} Mahasiswa Mengumpulkan</span>
+                                <button @click="deleteExamCloud(ex.code)" class="bg-rose-50 hover:bg-rose-100 text-rose-600 p-2 rounded-xl text-xs font-bold transition" title="Hapus Ujian">
+                                    <i class="fa-solid fa-trash"></i>
+                                </button>
+                            </div>
+                        </div>
+
+                        <div class="border-t border-slate-100 pt-4 space-y-3">
+                            <p class="text-xs font-black text-slate-600">Peringkat Lengkap & Rekap Nilai Cloud (1 - {{ getSubmissionsForExam(ex.code).length }} Peserta):</p>
+                            
+                            <div v-if="getSubmissionsForExam(ex.code).length === 0" class="text-xs text-slate-400 italic py-4 text-center bg-slate-50 rounded-2xl">
+                                Belum ada mahasiswa yang mengumpulkan ujian ini di server cloud.
+                            </div>
+
+                            <div v-for="(sub, rankIdx) in getSubmissionsForExam(ex.code)" :key="sub.id" class="bg-slate-50 p-4 rounded-2xl border border-slate-100 flex flex-wrap items-center justify-between gap-3">
+                                <div class="flex items-center gap-3">
+                                    <span class="w-7 h-7 rounded-xl bg-brand-primary text-white font-black text-xs flex items-center justify-center shrink-0 shadow-sm">
+                                        #{{ rankIdx + 1 }}
+                                    </span>
+                                    <div>
+                                        <p class="text-xs font-black text-slate-900">{{ sub.nama }} <span class="text-[11px] font-mono text-slate-500 font-bold">({{ sub.nim }})</span></p>
+                                        <p class="text-[11px] text-slate-500 font-medium">Kelas: {{ sub.kelas }} • Angkatan: {{ sub.angkatan }} • Jurusan: {{ sub.jurusan }}</p>
+                                        <p class="text-[11px] text-amber-700 font-extrabold mt-1" v-if="sub.note">Catatan Dosen: {{ sub.note }}</p>
+                                    </div>
+                                </div>
+                                <div class="flex items-center gap-3">
+                                    <div class="text-right">
+                                        <p class="text-base font-black text-brand-primary">{{ sub.totalScore }}</p>
+                                        <p class="text-[10px] text-slate-400 font-bold">Skor Akhir</p>
+                                    </div>
+                                    <button @click="openOverrideModal(sub)" class="bg-slate-900 hover:bg-black text-white px-3.5 py-2.5 rounded-xl text-xs font-bold transition shadow-sm flex items-center gap-1.5">
+                                        <i class="fa-solid fa-pen-to-square"></i> Koreksi
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+        </div>
+
+    </main>
+
+    <footer class="py-4 px-6 text-center text-xs text-slate-400 font-medium border-t border-slate-200 bg-white/50 flex flex-wrap justify-between items-center gap-2">
+        <span>Exam_Mine Cloud Platform © 2026 (Google Drive Cloud Storage Architecture)</span>
+        <span>Dikelola oleh <strong class="text-slate-700">{{ dosenProfile.nama }}</strong> (NIP. {{ dosenProfile.nip }})</span>
+    </footer>
+
+    <!-- MODAL KUSTOMISASI PROFIL & ASET (CLOUD STORAGE) -->
+    <div v-if="showCustomizationModal" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+        <div class="bg-white w-full max-w-lg rounded-3xl p-8 shadow-2xl space-y-5 max-h-[90vh] overflow-y-auto border border-slate-100">
+            <div class="flex items-center justify-between border-b border-slate-100 pb-4">
+                <h3 class="font-black text-base text-slate-900 flex items-center gap-2.5">
+                    <i class="fa-solid fa-sliders text-brand-primary text-lg"></i>
+                    <span>Kustomisasi Profil & Pengawas AI (Google Drive Cloud)</span>
+                </h3>
+                <button @click="showCustomizationModal = false" class="text-slate-400 hover:text-slate-600 text-xl"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+
+            <div class="space-y-4 text-xs font-bold">
+                <div>
+                    <label class="block text-slate-600 mb-1.5">Unggah Foto Profil / Avatar Dosen (File Asli - Tanpa Batas Ukuran)</label>
+                    <input type="file" accept="image/*" @change="handleAvatarUpload" class="w-full p-3 bg-slate-50 border border-slate-200 rounded-2xl focus:border-brand-primary focus:outline-none font-medium text-xs">
+                    <p v-if="isUploadingAvatar" class="text-indigo-600 mt-1 font-semibold">⏳ Mengunggah foto ke Cloud Storage Google...</p>
+                </div>
+                <div>
+                    <label class="block text-slate-600 mb-1.5">Unggah Logo / Icon Website (File Asli - Tanpa Batas Ukuran)</label>
+                    <input type="file" accept="image/*" @change="handleLogoUpload" class="w-full p-3 bg-slate-50 border border-slate-200 rounded-2xl focus:border-brand-primary focus:outline-none font-medium text-xs">
+                    <p v-if="isUploadingLogo" class="text-indigo-600 mt-1 font-semibold">⏳ Mengunggah logo ke Cloud Storage Google...</p>
+                </div>
+                <div>
+                    <label class="block text-slate-600 mb-1.5">Pesan / Kutipan Pengawas AI untuk Mahasiswa</label>
+                    <textarea v-model="dosenProfile.aiProctorMessage" rows="4" placeholder="Pesan motivasi atau peringatan pengawas..." class="w-full p-3.5 bg-slate-50 border border-slate-200 rounded-2xl focus:border-brand-primary focus:outline-none font-medium leading-relaxed"></textarea>
+                </div>
+            </div>
+
+            <div class="flex gap-3 pt-3">
+                <button @click="showCustomizationModal = false" class="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-700 py-3.5 rounded-2xl text-xs font-extrabold transition">Batal</button>
+                <button @click="saveCustomization" class="flex-1 bg-brand-primary hover:bg-brand-primaryDark text-white py-3.5 rounded-2xl text-xs font-extrabold transition shadow-md flex items-center justify-center gap-2">
+                    <span>Simpan ke Cloud Instan</span>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL AI EXAM GENERATOR -->
+    <div v-if="showAiGeneratorModal" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+        <div class="bg-white w-full max-w-xl rounded-3xl p-8 shadow-2xl space-y-5 max-h-[90vh] overflow-y-auto border border-slate-100">
+            <div class="flex items-center justify-between border-b border-slate-100 pb-4">
+                <h3 class="font-black text-base text-slate-900 flex items-center gap-2.5">
+                    <i class="fa-solid fa-wand-magic-sparkles text-purple-600 text-lg"></i>
+                    <span>AI Exam Generator (Mahasiswa Baru - Cloud)</span>
+                </h3>
+                <button @click="showAiGeneratorModal = false" class="text-slate-400 hover:text-slate-600 text-xl"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+
+            <div v-if="aiGenStep === 'form'" class="space-y-4 text-xs font-bold">
+                <div>
+                    <label class="block text-slate-600 mb-1.5">Mata Kuliah *</label>
+                    <select v-model="aiGenForm.mataKuliah" class="w-full p-3.5 bg-slate-50 border border-slate-200 rounded-2xl focus:border-purple-600 focus:bg-white focus:outline-none font-medium">
+                        <option value="Ilmu Bahan Listrik">Ilmu Bahan Listrik (Mahasiswa Baru)</option>
+                        <option value="Instalasi Tenaga Listrik">Instalasi Tenaga Listrik</option>
+                        <option value="Dasar Teknik Elektro">Dasar Teknik Elektro</option>
+                        <option value="Praktikum Bengkel Listrik">Praktikum Bengkel Listrik</option>
+                    </select>
+                </div>
+
+                <div>
+                    <div class="flex justify-between items-center mb-1.5">
+                        <label class="text-slate-600">Pilih / Tambah Topik Masalah (Maks. 5)</label>
+                        <span class="text-xs text-purple-600 font-extrabold">{{ aiGenForm.selectedTopics.length }} / 5 Terpilih</span>
+                    </div>
+
+                    <div class="flex gap-2.5 mb-2.5">
+                        <input type="text" v-model="manualTopicInput" placeholder="Ketik topik manual / studi kasus di sini..." class="flex-1 p-3 bg-slate-50 border border-slate-200 rounded-2xl focus:border-purple-600 focus:outline-none font-medium text-xs">
+                        <button @click="addManualTopic" class="bg-purple-600 hover:bg-purple-700 text-white px-5 py-3 rounded-2xl text-xs font-extrabold transition shadow-sm">Tambah</button>
+                    </div>
+
+                    <div class="bg-slate-50 p-3.5 rounded-2xl border border-slate-200 grid grid-cols-1 gap-2 max-h-48 overflow-y-auto">
+                        <div 
+                            v-for="topic in availableTopics" 
+                            :key="topic" 
+                            @click="toggleTopic(topic)"
+                            :class="aiGenForm.selectedTopics.includes(topic) ? 'bg-purple-600 text-white border-purple-600' : 'bg-white text-slate-700 border-slate-200 hover:border-purple-300'"
+                            class="p-3 rounded-xl border text-xs font-medium cursor-pointer transition flex items-center justify-between shadow-sm">
+                            <span>{{ topic }}</span>
+                            <i v-if="aiGenForm.selectedTopics.includes(topic)" class="fa-solid fa-check text-white"></i>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-2 gap-3">
+                    <div>
+                        <label class="block text-slate-600 mb-1.5">Tingkat Kesulitan & Nalar</label>
+                        <select v-model="aiGenForm.tingkat" class="w-full p-3.5 bg-slate-50 border border-slate-200 rounded-2xl focus:border-purple-600 focus:bg-white focus:outline-none font-medium">
+                            <option value="Konseptual Dasar Maba (C3)">Konseptual Dasar Maba (C3)</option>
+                            <option value="Analisis Kritis Studi Kasus (C4)">Analisis Kritis Studi Kasus (C4)</option>
+                            <option value="Evaluasi & Argumen Opini (C5)">Evaluasi & Argumen Opini (C5)</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-slate-600 mb-1.5">Jumlah Soal Uraian (Maks. 5)</label>
+                        <select v-model.number="aiGenForm.jumlah" class="w-full p-3.5 bg-slate-50 border border-slate-200 rounded-2xl focus:border-purple-600 focus:bg-white focus:outline-none font-medium">
+                            <option value="1">1 Soal</option>
+                            <option value="2">2 Soal</option>
+                            <option value="3">3 Soal</option>
+                            <option value="4">4 Soal</option>
+                            <option value="5">5 Soal</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-2 gap-3">
+                    <div>
+                        <label class="block text-slate-600 mb-1.5">Kode Ujian 4 Digit</label>
+                        <input type="text" maxlength="4" v-model="aiGenForm.code" placeholder="Cth: 8899" class="w-full p-3.5 bg-slate-50 border border-slate-200 rounded-2xl font-mono font-bold">
+                    </div>
+                    <div>
+                        <label class="block text-slate-600 mb-1.5">Durasi (Menit)</label>
+                        <input type="number" v-model="aiGenForm.duration" class="w-full p-3.5 bg-slate-50 border border-slate-200 rounded-2xl font-bold">
+                    </div>
+                </div>
+
+                <div class="pt-3">
+                    <button 
+                        @click="generateExamByAi" 
+                        :disabled="aiGenForm.selectedTopics.length === 0"
+                        :class="aiGenForm.selectedTopics.length > 0 ? 'bg-gradient-to-r from-purple-700 to-indigo-600 shadow-xl' : 'bg-slate-300 cursor-not-allowed'"
+                        class="w-full text-white font-extrabold py-4 rounded-2xl transition active:scale-95 text-xs uppercase tracking-wider flex items-center justify-center gap-2.5">
+                        <i class="fa-solid fa-wand-magic-sparkles text-amber-300 text-base"></i>
+                        <span>Generate Soal Berbasis Masalah oleh AI</span>
+                    </button>
+                    <p v-if="aiGenForm.selectedTopics.length === 0" class="text-xs text-rose-600 text-center mt-1.5">Pilih atau ketik minimal 1 topik di atas.</p>
+                </div>
+            </div>
+
+            <div v-else class="space-y-5">
+                <div class="bg-purple-50 border border-purple-200 rounded-2xl p-4 text-xs text-purple-900">
+                    <p class="font-extrabold text-sm"><i class="fa-solid fa-circle-check text-purple-600 mr-1.5"></i> AI Berhasil Merumuskan Studi Kasus & Masalah!</p>
+                    <p class="text-purple-700 mt-1">Dapat memeriksa dan mengedit langsung kalimat soal berbasis masalah di bawah ini sebelum diterbitkan.</p>
+                </div>
+
+                <div class="space-y-4 max-h-[50vh] overflow-y-auto pr-2">
+                    <div v-for="(q, idx) in previewAiQuestions" :key="idx" class="bg-slate-50 p-4 rounded-2xl border border-slate-200 space-y-2.5">
+                        <div class="flex justify-between items-center">
+                            <span class="font-black text-xs text-slate-700">Soal Studi Kasus {{ idx + 1 }}</span>
+                            <div class="flex items-center gap-1.5">
+                                <span class="text-xs text-slate-500 font-bold">Bobot Poin:</span>
+                                <input type="number" v-model.number="q.maxScore" class="w-20 p-1.5 text-center text-xs font-bold bg-white border border-slate-300 rounded-xl">
+                            </div>
+                        </div>
+                        <textarea v-model="q.text" rows="4" class="w-full p-3 text-xs bg-white border border-slate-300 rounded-2xl focus:border-purple-600 focus:outline-none font-medium leading-relaxed"></textarea>
+                    </div>
+                </div>
+
+                <div class="flex gap-3 pt-3">
+                    <button @click="aiGenStep = 'form'" class="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-700 py-3.5 rounded-2xl text-xs font-extrabold transition">Kembali</button>
+                    <button @click="publishAiExam" class="flex-2 bg-gradient-to-r from-purple-700 to-indigo-600 hover:opacity-95 text-white py-3.5 px-6 rounded-2xl text-xs font-extrabold shadow-xl transition">Terbitkan ke Server Cloud Instan</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL BUAT UJIAN MANUAL -->
+    <div v-if="showCreateExamModal" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+        <div class="bg-white w-full max-w-lg rounded-3xl p-8 shadow-2xl space-y-5 max-h-[90vh] overflow-y-auto border border-slate-100">
+            <h3 class="font-black text-base text-slate-900 border-b border-slate-100 pb-3">Buat Paket Soal Manual (Cloud)</h3>
+            <div class="space-y-4 text-xs font-bold">
+                <div>
+                    <label class="block text-slate-600 mb-1.5">Judul Ujian</label>
+                    <input type="text" v-model="newExamForm.title" placeholder="Cth: UTS Ilmu Bahan Listrik" class="w-full p-3.5 bg-slate-50 border border-slate-200 rounded-2xl font-medium">
+                </div>
+                <div class="grid grid-cols-2 gap-3">
+                    <div>
+                        <label class="block text-slate-600 mb-1.5">Kode 4 Digit</label>
+                        <input type="text" maxlength="4" v-model="newExamForm.code" placeholder="Cth: 5678" class="w-full p-3.5 bg-slate-50 border border-slate-200 rounded-2xl font-mono font-bold">
+                    </div>
+                    <div>
+                        <label class="block text-slate-600 mb-1.5">Durasi (Menit)</label>
+                        <input type="number" v-model="newExamForm.duration" class="w-full p-3.5 bg-slate-50 border border-slate-200 rounded-2xl font-bold">
+                    </div>
+                </div>
+                <div>
+                    <label class="block text-slate-600 mb-1.5">Soal Studi Kasus 1</label>
+                    <textarea v-model="newExamForm.q1Text" rows="3" placeholder="Tulis studi kasus dan minta pendapat mahasiswa..." class="w-full p-3.5 bg-slate-50 border border-slate-200 rounded-2xl font-medium"></textarea>
+                    <input type="number" v-model="newExamForm.q1Max" placeholder="Bobot Poin (Cth: 50)" class="w-full mt-2 p-3 bg-slate-50 border border-slate-200 rounded-2xl font-bold">
+                </div>
+                <div>
+                    <label class="block text-slate-600 mb-1.5">Soal Studi Kasus 2</label>
+                    <textarea v-model="newExamForm.q2Text" rows="3" placeholder="Tulis studi kasus dan minta pendapat mahasiswa..." class="w-full p-3.5 bg-slate-50 border border-slate-200 rounded-2xl font-medium"></textarea>
+                    <input type="number" v-model="newExamForm.q2Max" placeholder="Bobot Poin (Cth: 50)" class="w-full mt-2 p-3 bg-slate-50 border border-slate-200 rounded-2xl font-bold">
+                </div>
+            </div>
+            <div class="flex gap-3 pt-3">
+                <button @click="showCreateExamModal = false" class="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-700 py-3.5 rounded-2xl text-xs font-extrabold transition">Batal</button>
+                <button @click="saveNewExam" class="flex-1 bg-brand-primary hover:bg-brand-primaryDark text-white py-3.5 rounded-2xl text-xs font-extrabold transition shadow-md">Terbitkan ke Cloud Instan</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL KOREKSI MANUAL (OVERRIDE) -->
+    <div v-if="showOverrideModal" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+        <div class="bg-white w-full max-w-md rounded-3xl p-8 shadow-2xl space-y-5 border border-slate-100">
+            <div class="bg-amber-50 border border-amber-200 p-4 rounded-2xl">
+                <h3 class="font-black text-xs text-amber-900 uppercase tracking-wider">Koreksi Manual Dosen (Cloud)</h3>
+                <p class="text-xs text-amber-800 mt-1">Mahasiswa: <b class="text-slate-900">{{ activeSubmissionToOverride.nama }}</b></p>
+            </div>
+            <div class="space-y-4 text-xs font-bold">
+                <div>
+                    <label class="block text-slate-600 mb-1.5">Skor Final Kualitas Argumen (0 - 100)</label>
+                    <input type="number" v-model="overrideScore" min="0" max="100" class="w-full p-3.5 bg-slate-50 border border-slate-200 rounded-2xl font-black text-lg text-brand-primary">
+                </div>
+                <div>
+                    <label class="block text-slate-600 mb-1.5">Catatan / Apresiasi Dosen</label>
+                    <textarea v-model="overrideNote" rows="3" placeholder="Tambahkan catatan khusus..." class="w-full p-3.5 bg-slate-50 border border-slate-200 rounded-2xl font-medium"></textarea>
+                </div>
+            </div>
+            <div class="flex gap-3 pt-3">
+                <button @click="showOverrideModal = false" class="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-700 py-3.5 rounded-2xl text-xs font-extrabold transition">Batal</button>
+                <button @click="saveOverride" class="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white py-3.5 rounded-2xl text-xs font-extrabold transition shadow-md">Simpan ke Cloud Instan</button>
+            </div>
+        </div>
+    </div>
+
+</div>
+
+<script>
+    const { createApp, ref, computed, onMounted, onUnmounted } = Vue;
+
+    const SakuragiBox = {
+        props: ['expression', 'quote'],
+        template: `
+            <div class="bg-slate-900 text-white p-4 sm:p-5 rounded-2xl shadow-xl border border-slate-800 flex items-center gap-4 my-4">
+                <div class="w-12 h-12 rounded-2xl bg-brand-primary flex items-center justify-center font-black text-xl shrink-0 shadow-inner">
+                    <i class="fa-solid fa-user-graduate"></i>
+                </div>
+                <div>
+                    <p class="text-[10px] text-amber-400 font-extrabold uppercase tracking-wider">Pesan Pengawas AI Cloud</p>
+                    <p class="text-xs sm:text-sm font-medium text-slate-200 mt-0.5 leading-snug">"{{ quote }}"</p>
+                </div>
+            </div>
+        `
+    };
+
+    createApp({
+        components: {
+            'sakuragi-box': SakuragiBox
+        },
+        setup() {
+            const currentMode = ref('mahasiswa');
+            const mhsStep = ref('code');
+            const toastMessage = ref('');
+            
+            const showToast = (msg) => {
+                toastMessage.value = msg;
+                setTimeout(() => { toastMessage.value = ''; }, 3500);
+            };
+
+            const dosenAuthenticated = ref(false);
+            const dosenPinError = ref(false);
+
+            const dosenLoginForm = ref({
+                nama: 'Aldiansyah Nur Alam, S.Pd., M.Pd.',
+                nip: '199605142025061004',
+                jurusan: 'Pendidikan Teknik Elektro',
+                kampus: 'Universitas Negeri Makassar (UNM)',
+                pin: ''
+            });
+            
+            const defaultDosenProfile = {
+                nama: 'Aldiansyah Nur Alam, S.Pd., M.Pd.',
+                nip: '199605142025061004',
+                jurusan: 'Pendidikan Teknik Elektro',
+                kampus: 'Universitas Negeri Makassar (UNM)',
+                avatarUrl: '',
+                siteLogoUrl: '',
+                aiProctorMessage: 'Selamat datang rekan mahasiswa baru! Jelaskan apa maksud dari masalah di atas, kemukakan pendapat dan solusi analisis kritismu secara mendalam.'
+            };
+
+            const dosenProfile = ref({ ...defaultDosenProfile });
+            const isUploadingAvatar = ref(false);
+            const isUploadingLogo = ref(false);
+
+            const unmJurusanList = ref([
+                'Pendidikan Teknik Elektro',
+                'Pendidikan Teknik Mesin',
+                'Pendidikan Teknik Otomotif',
+                'Pendidikan Teknik Sipil dan Bangunan',
+                'Pendidikan Teknik Informatika dan Komputer (PTIK)',
+                'Teknik Elektro',
+                'Teknik Mesin',
+                'Teknik Sipil',
+                'Teknik Komputer',
+                'Pendidikan Vokasional Mekatronika',
+                'Pendidikan Kesejahteraan Keluarga',
+                'Pendidikan Biologi',
+                'Pendidikan Fisika',
+                'Pendidikan Matematika',
+                'Pendidikan Guru Sekolah Dasar (PGSD)'
+            ]);
+
+            const kampusList = ref([
+                'Universitas Negeri Makassar (UNM)',
+                'Universitas Negeri Yogyakarta (UNY)',
+                'Universitas Pendidikan Indonesia (UPI)',
+                'Universitas Negeri Malang (UM)',
+                'Universitas Negeri Padang (UNP)',
+                'Universitas Negeri Semarang (UNNES)',
+                'Universitas Negeri Surabaya (UNESA)',
+                'Universitas Gadjah Mada (UGM)',
+                'Universitas Indonesia (UI)',
+                'Institut Teknologi Bandung (ITB)',
+                'Institut Teknologi Sepuluh Nopember (ITS)',
+                'Universitas Hasanuddin (Unhas)'
+            ]);
+
+            const topicPresets = {
+                'Ilmu Bahan Listrik': [
+                    'Sifat Konduktor dan Semikonduktor pada Instalasi',
+                    'Bahan Dielektrik dan Isolator pada Trafo Daya',
+                    'Material Magnetik pada Inti Transformator',
+                    'Karakteristik Termal Hambatan Kabel Penghantar',
+                    'Fenomena Breakdown Voltage pada Isolasi Kabel',
+                    'Material Superkonduktor untuk Efisiensi Energi',
+                    'Pengaruh Suhu terhadap Resistivitas Logam Tembaga',
+                    'Klasifikasi Kelas Isolasi pada Motor Listrik'
+                ],
+                'Instalasi Tenaga Listrik': [
+                    'Kapasitas Hantar Arus (KHA) pada Beban Industri',
+                    'Sistem Pembumian (Grounding) di Gedung Bertingkat',
+                    'Proteksi Arus Lebih (MCB/MCCB) pada Hubung Singkat'
+                ],
+                'Dasar Teknik Elektro': [
+                    'Penerapan Hukum Ohm dan Kirchhoff pada Rangkaian',
+                    'Analisis Daya 3 Fasa pada Beban Tidak Seimbang'
+                ],
+                'Praktikum Bengkel Listrik': [
+                    'Prosedur K3 dan Penggunaan Alat Ukur Megger',
+                    'Troubleshooting Rangkaian Kontrol Motor 3 Fasa'
+                ]
+            };
+
+            const customTopicsMap = ref({});
+            const manualTopicInput = ref('');
+
+            const availableTopics = computed(() => {
+                const course = aiGenForm.value.mataKuliah;
+                const presets = topicPresets[course] || [];
+                const customs = customTopicsMap.value[course] || [];
+                return [...customs, ...presets];
+            });
+
+            const inputExamCode = ref('');
+            const codeError = ref('');
+            
+            const defaultExams = [
+                {
+                    code: '1234',
+                    title: 'UTS Studi Kasus Ilmu Bahan Listrik (Cloud)',
+                    duration: 45,
+                    questions: [
+                        { id: 'q1', text: 'Studi Kasus Permasalahan Maba: Sebuah gardu distribusi mengalami pemanasan berlebih pada kabel penghantar tembaga akibat lonjakan beban industri. Jelaskan apa maksud dari permasalahan tersebut, kemukakan pendapat serta solusi aplikatif mengatasinya!', maxScore: 50 },
+                        { id: 'q2', text: 'Studi Kasus Permasalahan Maba: Ditemukan kegagalan isolasi (breakdown voltage) pada trafo daya di lingkungan berkelembaban tinggi. Kemukakan pendapat, maksud fenomena tersebut, serta langkah pencegahan terbaik!', maxScore: 50 }
+                    ]
+                }
+            ];
+
+            const exams = ref([...defaultExams]);
+            const currentExam = ref(null);
+
+            const studentForm = ref({
+                nama: '',
+                nim: '',
+                kelas: '',
+                angkatan: '',
+                jurusan: ''
+            });
+            const identityError = ref('');
+            const studentAnswers = ref({});
+            const pasteWarning = ref(false);
+            const currentSubmission = ref(null);
+            const submissions = ref([]);
+
+            const showCreateExamModal = ref(false);
+            const showAiGeneratorModal = ref(false);
+            const showCustomizationModal = ref(false);
+            const showOverrideModal = ref(false);
+            const overrideScore = ref(0);
+            const overrideNote = ref('');
+            const activeSubmissionToOverride = ref(null);
+
+            const aiGenStep = ref('form');
+            const previewAiQuestions = ref([]);
+            const aiGenForm = ref({
+                mataKuliah: 'Ilmu Bahan Listrik',
+                selectedTopics: ['Sifat Konduktor dan Semikonduktor pada Instalasi', 'Bahan Dielektrik dan Isolator pada Trafo Daya'],
+                tingkat: 'Konseptual Dasar Maba (C3)',
+                jumlah: 2,
+                code: '8899',
+                duration: 45
+            });
+
+            const newExamForm = ref({
+                title: '',
+                code: '',
+                duration: 30,
+                q1Text: '',
+                q1Max: 50,
+                q2Text: '',
+                q2Max: 50
+            });
+
+            const initCloudSync = () => {
+                if (window.cloudApi) {
+                    window.cloudApi.listenCollection('exams', (data) => {
+                        if (data.length > 0) exams.value = data;
+                    });
+                    window.cloudApi.listenCollection('submissions', (data) => {
+                        submissions.value = data;
+                    });
+                    window.cloudApi.listenCollection('dosen_profile', (data) => {
+                        data.forEach(item => {
+                            if (item.id === 'main_profile' || item.nip) {
+                                dosenProfile.value = { ...dosenProfile.value, ...item };
+                                dosenLoginForm.value = { ...dosenProfile.value, pin: '' };
+                            }
+                        });
+                    });
+                }
+            };
+
+            onMounted(() => {
+                if (typeof window.cloudApi !== 'undefined') {
+                    initCloudSync();
+                } else {
+                    window.addEventListener('cloud-firebase-ready', initCloudSync);
+                }
+                document.addEventListener('visibilitychange', handleVisibilityChange);
+            });
+
+            onUnmounted(() => {
+                window.removeEventListener('cloud-firebase-ready', initCloudSync);
+                document.removeEventListener('visibilitychange', handleVisibilityChange);
+            });
+
+            const switchMode = (mode) => { currentMode.value = mode; };
+
+            const verifyDosenLogin = () => {
+                if (dosenLoginForm.value.pin === 'Tensai1405' && dosenLoginForm.value.nama.trim() !== '') {
+                    dosenAuthenticated.value = true;
+                    dosenPinError.value = false;
+                    dosenProfile.value = {
+                        ...dosenProfile.value,
+                        nama: dosenLoginForm.value.nama,
+                        nip: dosenLoginForm.value.nip,
+                        jurusan: dosenLoginForm.value.jurusan,
+                        kampus: dosenLoginForm.value.kampus
+                    };
+                    
+                    showToast("Login Dosen Cloud Berhasil!");
+
+                    if (window.cloudApi && window.cloudApi.saveDoc) {
+                        window.cloudApi.saveDoc('dosen_profile', 'main_profile', { id: 'main_profile', ...dosenProfile.value });
+                    }
+                } else {
+                    dosenPinError.value = true;
+                }
+            };
+
+            const openCustomizationModal = () => { showCustomizationModal.value = true; };
+
+            const handleAvatarUpload = async (e) => {
+                const file = e.target.files[0];
+                if (!file) return;
+                isUploadingAvatar.value = true;
+                try {
+                    const downloadUrl = await window.cloudApi.uploadFileToCloud(file, 'avatars');
+                    dosenProfile.value.avatarUrl = downloadUrl;
+                    showToast("Foto profil berhasil diunggah ke Cloud Storage!");
+                } catch (err) {
+                    showToast("Gagal mengunggah foto.");
+                } finally {
+                    isUploadingAvatar.value = false;
+                }
+            };
+
+            const handleLogoUpload = async (e) => {
+                const file = e.target.files[0];
+                if (!file) return;
+                isUploadingLogo.value = true;
+                try {
+                    const downloadUrl = await window.cloudApi.uploadFileToCloud(file, 'logos');
+                    dosenProfile.value.siteLogoUrl = downloadUrl;
+                    showToast("Logo website berhasil diunggah ke Cloud Storage!");
+                } catch (err) {
+                    showToast("Gagal mengunggah logo.");
+                } finally {
+                    isUploadingLogo.value = false;
+                }
+            };
+
+            const saveCustomization = () => {
+                showCustomizationModal.value = false;
+                showToast("Profil & Foto tersimpan permanen di Cloud Server!");
+
+                if (window.cloudApi && window.cloudApi.saveDoc) {
+                    window.cloudApi.saveDoc('dosen_profile', 'main_profile', { id: 'main_profile', ...dosenProfile.value });
+                }
+            };
+
+            const verifyExamCode = () => {
+                codeError.value = '';
+                const found = exams.value.find(e => e.code === inputExamCode.value.trim());
+                if (found) {
+                    currentExam.value = found;
+                    mhsStep.value = 'identity';
+                } else {
+                    codeError.value = 'Kode ujian tidak valid atau tidak ditemukan di server cloud!';
+                }
+            };
+
+            const filterNimInput = () => {
+                studentForm.value.nim = studentForm.value.nim.replace(/\D/g, '');
+            };
+
+            const isIdentityValid = computed(() => {
+                return studentForm.value.nama.trim() !== '' &&
+                       studentForm.value.nim.trim() !== '' &&
+                       studentForm.value.kelas.trim() !== '' &&
+                       studentForm.value.angkatan.trim() !== '' &&
+                       studentForm.value.jurusan.trim() !== '';
+            });
+
+            const startExam = () => {
+                if (!isIdentityValid.value) {
+                    identityError.value = 'Semua data identitas wajib diisi!';
+                    return;
+                }
+                identityError.value = '';
+                mhsStep.value = 'active_exam';
+            };
+
+            const handlePasteAttempt = () => {
+                pasteWarning.value = true;
+                setTimeout(() => { pasteWarning.value = false; }, 3000);
+            };
+
+            const handleVisibilityChange = () => {
+                if (document.hidden && mhsStep.value === 'active_exam') {
+                    mhsStep.value = 'reset_page';
+                    studentAnswers.value = {};
+                }
+            };
+
+            const restartAfterReset = () => {
+                mhsStep.value = 'code';
+                inputExamCode.value = '';
+            };
+
+            const openAiGeneratorModal = () => {
+                aiGenStep.value = 'form';
+                showAiGeneratorModal.value = true;
+            };
+
+            const addManualTopic = () => {
+                const topic = manualTopicInput.value.trim();
+                if (!topic) return;
+                const course = aiGenForm.value.mataKuliah;
+                if (!customTopicsMap.value[course]) customTopicsMap.value[course] = [];
+                if (!customTopicsMap.value[course].includes(topic) && !topicPresets[course]?.includes(topic)) {
+                    customTopicsMap.value[course].push(topic);
+                    if (aiGenForm.value.selectedTopics.length < 5) aiGenForm.value.selectedTopics.push(topic);
+                }
+                manualTopicInput.value = '';
+            };
+
+            const toggleTopic = (topic) => {
+                const idx = aiGenForm.value.selectedTopics.indexOf(topic);
+                if (idx > -1) {
+                    aiGenForm.value.selectedTopics.splice(idx, 1);
+                } else {
+                    if (aiGenForm.value.selectedTopics.length < 5) aiGenForm.value.selectedTopics.push(topic);
+                }
+            };
+
+            const generateExamByAi = () => {
+                if (aiGenForm.value.selectedTopics.length === 0) return;
+                const count = Number(aiGenForm.value.jumlah) || 2;
+                let generated = [];
+                const maxScorePerQ = Math.floor(100 / count);
+
+                aiGenForm.value.selectedTopics.slice(0, count).forEach((topic, i) => {
+                    generated.push({
+                        id: 'q' + (i + 1),
+                        text: `Studi Kasus Mahasiswa Baru ${i + 1}: Perhatikan permasalahan dan fenomena terkait "${topic}" dalam mata kuliah ${aiGenForm.value.mataKuliah}. Jelaskan apa maksud dari masalah tersebut, kemukakan pendapat dan sudut pandang analitis Anda, serta berikan solusi penyelesaian terbaik!`,
+                        maxScore: i === (count - 1) ? (100 - (maxScorePerQ * (count - 1))) : maxScorePerQ
+                    });
+                });
+
+                previewAiQuestions.value = generated;
+                aiGenStep.value = 'preview';
+            };
+
+            const publishAiExam = () => {
+                const generatedEx = {
+                    code: aiGenForm.value.code || '7788',
+                    title: `UTS ${aiGenForm.value.mataKuliah} (${aiGenForm.value.tingkat})`,
+                    duration: Number(aiGenForm.value.duration) || 45,
+                    questions: [...previewAiQuestions.value]
+                };
+
+                exams.value.push(generatedEx);
+                showAiGeneratorModal.value = false;
+                showToast("Ujian AI berhasil diterbitkan ke Cloud Server!");
+
+                if (window.cloudApi && window.cloudApi.saveDoc) {
+                    window.cloudApi.saveDoc('exams', generatedEx.code, generatedEx);
+                }
+            };
+
+            const confirmSubmit = () => {
+                mhsStep.value = 'evaluating';
+
+                setTimeout(() => {
+                    let totalScore = 0;
+                    let scoresBreakdown = [];
+
+                    currentExam.value.questions.forEach(q => {
+                        const ans = studentAnswers.value[q.id] || '';
+                        const wordCount = ans.trim().split(/\s+/).filter(Boolean).length;
+                        
+                        let score = 0;
+                        let reasoning = '';
+                        if (wordCount > 25) {
+                            score = q.maxScore;
+                            reasoning = 'Analisis studi kasus mahasiswa baru sangat mendalam, penjelasan maksud masalah sangat tepat, sudut pandang opini sangat tajam, dan memberikan solusi pemecahan masalah yang luar biasa.';
+                        } else if (wordCount > 10) {
+                            score = Math.floor(q.maxScore * 0.75);
+                            reasoning = 'Pendapat dan penjelasan maksud masalah sudah relevan serta menunjukkan nalar kritis, namun penjabaran solusi masih dapat diperkaya.';
+                        } else {
+                            score = Math.floor(q.maxScore * 0.4);
+                            reasoning = 'Argumen dan sudut pandang terlalu singkat. Diperlukan kedalaman ulasan dan eksplorasi masalah yang lebih komprehensif.';
+                        }
+                        totalScore += score;
+                        scoresBreakdown.push({
+                            questionId: q.id,
+                            maxScore: q.maxScore,
+                            score: score,
+                            reasoning: reasoning
+                        });
+                    });
+
+                    const subId = currentExam.value.code + '_' + studentForm.value.nim;
+                    const sub = {
+                        id: subId,
+                        examCode: currentExam.value.code,
+                        nama: studentForm.value.nama,
+                        nim: studentForm.value.nim,
+                        kelas: studentForm.value.kelas,
+                        angkatan: studentForm.value.angkatan,
+                        jurusan: studentForm.value.jurusan,
+                        answers: { ...studentAnswers.value },
+                        scores: scoresBreakdown,
+                        totalScore: Math.min(totalScore, 100),
+                        note: '',
+                        timestamp: new Date().toISOString()
+                    };
+
+                    currentSubmission.value = sub;
+                    submissions.value.push(sub);
+                    mhsStep.value = 'results';
+
+                    if (window.cloudApi && window.cloudApi.saveDoc) {
+                        window.cloudApi.saveDoc('submissions', subId, sub);
+                    }
+                }, 1500);
+            };
+
+            const getAnswerForQuestion = (qId) => { return currentSubmission.value?.answers[qId] || '-'; };
+
+            const activeExamSubmissions = computed(() => {
+                if (!currentExam.value) return [];
+                return submissions.value
+                    .filter(s => s.examCode === currentExam.value.code)
+                    .sort((a, b) => b.totalScore - a.totalScore);
+            });
+
+            const getStudentRank = (nim) => {
+                const sorted = activeExamSubmissions.value;
+                const idx = sorted.findIndex(s => s.nim === nim);
+                return idx !== -1 ? idx + 1 : 1;
+            };
+
+            const resetStudentSession = () => {
+                mhsStep.value = 'code';
+                inputExamCode.value = '';
+                studentAnswers.value = {};
+                studentForm.value = { nama: '', nim: '', kelas: '', angkatan: '', jurusan: '' };
+            };
+
+            const getSubmissionsCount = (code) => { return submissions.value.filter(s => s.examCode === code).length; };
+            const getSubmissionsForExam = (code) => { 
+                return submissions.value
+                    .filter(s => s.examCode === code)
+                    .sort((a, b) => b.totalScore - a.totalScore); 
+            };
+
+            const openCreateExamModal = () => { showCreateExamModal.value = true; };
+            const saveNewExam = () => {
+                if (!newExamForm.value.title || !newExamForm.value.code) return;
+                const newEx = {
+                    code: newExamForm.value.code,
+                    title: newExamForm.value.title,
+                    duration: newExamForm.value.duration,
+                    questions: [
+                        { id: 'q1', text: newExamForm.value.q1Text, maxScore: Number(newExamForm.value.q1Max) || 50 },
+                        { id: 'q2', text: newExamForm.value.q2Text, maxScore: Number(newExamForm.value.q2Max) || 50 }
+                    ]
+                };
+
+                exams.value.push(newEx);
+                showCreateExamModal.value = false;
+                newExamForm.value = { title: '', code: '', duration: 30, q1Text: '', q1Max: 50, q2Text: '', q2Max: 50 };
+                showToast("Ujian manual berhasil diterbitkan ke Cloud!");
+
+                if (window.cloudApi && window.cloudApi.saveDoc) {
+                    window.cloudApi.saveDoc('exams', newEx.code, newEx);
+                }
+            };
+
+            const deleteExamCloud = (code) => {
+                exams.value = exams.value.filter(e => e.code !== code);
+                showToast("Ujian berhasil dihapus.");
+
+                if (window.cloudApi && window.cloudApi.removeDoc) {
+                    window.cloudApi.removeDoc('exams', code);
+                }
+            };
+
+            const openOverrideModal = (sub) => {
+                activeSubmissionToOverride.value = sub;
+                overrideScore.value = sub.totalScore;
+                overrideNote.value = sub.note || '';
+                showOverrideModal.value = true;
+            };
+
+            const saveOverride = () => {
+                if (activeSubmissionToOverride.value) {
+                    activeSubmissionToOverride.value.totalScore = Number(overrideScore.value);
+                    activeSubmissionToOverride.value.note = overrideNote.value;
+                    showOverrideModal.value = false;
+                    showToast("Nilai berhasil dikoreksi manual di Cloud!");
+
+                    if (window.cloudApi && window.cloudApi.saveDoc) {
+                        window.cloudApi.saveDoc('submissions', activeSubmissionId(activeSubmissionToOverride.value), activeSubmissionToOverride.value);
+                    }
+                }
+            };
+
+            const activeSubmissionId = (sub) => {
+                return sub.id || (sub.examCode + '_' + sub.nim);
+            };
+
+            const exportCSV = () => {
+                let csvContent = "data:text/csv;charset=utf-8,Kode Ujian,NIM,Nama,Kelas,Angkatan,Jurusan,Skor Analisis,Catatan Dosen\n";
+                submissions.value.forEach(s => {
+                    csvContent += `"${s.examCode}","${s.nim}","${s.nama}","${s.kelas}","${s.angkatan}","${s.jurusan || '-'}",${s.totalScore},"${s.note || ''}"\n`;
+                });
+                const encodedUri = encodeURI(csvContent);
+                const link = document.createElement("a");
+                link.setAttribute("href", encodedUri);
+                link.setAttribute("download", "rekap_nilai_exam_mine_cloud.csv");
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+                showToast("File CSV rekap cloud berhasil diunduh!");
+            };
+
+            return {
+                currentMode, mhsStep, toastMessage, dosenAuthenticated, dosenPinError, dosenLoginForm, dosenProfile,
+                isUploadingAvatar, isUploadingLogo,
+                showCustomizationModal, openCustomizationModal, handleAvatarUpload, handleLogoUpload, saveCustomization,
+                unmJurusanList, kampusList, topicPresets, customTopicsMap, manualTopicInput, availableTopics,
+                inputExamCode, codeError, exams, currentExam, studentForm, identityError, studentAnswers,
+                pasteWarning, currentSubmission, submissions, showCreateExamModal, showAiGeneratorModal,
+                showOverrideModal, overrideScore, overrideNote, activeSubmissionToOverride, newExamForm,
+                aiGenStep, previewAiQuestions, aiGenForm,
+                switchMode, verifyDosenLogin, verifyExamCode, filterNimInput, isIdentityValid, startExam,
+                handlePasteAttempt, restartAfterReset, confirmSubmit, getAnswerForQuestion,
+                activeExamSubmissions, getStudentRank, resetStudentSession, getSubmissionsCount,
+                getSubmissionsForExam, openAiGeneratorModal, addManualTopic, toggleTopic, generateExamByAi, publishAiExam, openCreateExamModal, saveNewExam,
+                deleteExamCloud, openOverrideModal, saveOverride, exportCSV
+            };
+        }
+    }).mount('#app');
+</script>
+
+</body>
+</html>
